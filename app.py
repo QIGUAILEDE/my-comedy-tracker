@@ -295,7 +295,7 @@ elif menu == "📝 数据录入":
     
     with t1:
         st.caption("粘贴聊天记录或碎碎念，自动提炼并归档。")
-        DEEPSEEK_API_KEY = "sk-3f0de07f041f47f598fdb5d2aaab77fb"
+        DEEPSEEK_API_KEY = st.secrets["DEEPSEEK_API_KEY"]
         raw_text = st.text_area("输入文字：", height=120, label_visibility="collapsed", placeholder="昨天在大剧院看剧花了680，给五星。")
         
         if st.button("🪄 开始解析", use_container_width=True):
