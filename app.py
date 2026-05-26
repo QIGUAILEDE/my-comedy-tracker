@@ -75,6 +75,12 @@ def load_all_data():
                     df['Year'] = pd.to_datetime(df['Date'], errors='coerce').dt.year.fillna(current_date.year).astype(int)
                     df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
                     df['Rating'] = pd.to_numeric(df['Rating'], errors='coerce')
+                    
+                    # 消除 NaN 问题：将文本列的空白替换为真正的空字符串
+                    for col in ['Artist', 'Venue', 'Review']:
+                        if col in df.columns:
+                            df[col] = df[col].fillna("").astype(str).replace("nan", "")
+                            
                     data_dict[name] = df
                 else:
                     data_dict[name] = pd.DataFrame()
@@ -89,6 +95,12 @@ def load_all_data():
             df_specials.columns = df_specials.columns.str.strip()
             df_specials = df_specials.dropna(subset=['Special_Name'])
             df_specials['Year'] = pd.to_numeric(df_specials['Year'], errors='coerce').fillna(current_date.year).astype(int)
+            
+            # 清洗专场表的文本列
+            for col in ['Comedian', 'Type', 'Format', 'Note']:
+                if col in df_specials.columns:
+                    df_specials[col] = df_specials[col].fillna("").astype(str).replace("nan", "")
+                    
             data_dict["Specials"] = df_specials
         else:
             data_dict["Specials"] = pd.DataFrame()
@@ -140,8 +152,13 @@ if menu == "📅 当月日程":
                             for _, row in events_today.iterrows():
                                 price_display = f"¥{int(row['Price'])}" if pd.notnull(row['Price']) else "无价格"
                                 rating_display = f"{'★'*int(row['Rating'])}" if pd.notnull(row['Rating']) else "未评分"
+                                
+                                # 智能判断：如果没有场地，就不显示 " | "
+                                venue_text = str(row.get('Venue', '')).strip()
+                                venue_display = f" | {venue_text}" if venue_text else ""
+                                
                                 st.markdown(f"**{row['Title']}**")
-                                st.caption(f"{row['Category']} | {row['Venue']}")
+                                st.caption(f"{row['Category']}{venue_display}")
                                 st.write(f"🏷️ {price_display} | ⭐ {rating_display}")
                                 st.divider()
                     else:
@@ -155,10 +172,14 @@ if menu == "📅 当月日程":
             upcoming_df = total_df[total_df['Date'] >= current_date].sort_values(by='Date').head(5)
             if not upcoming_df.empty:
                 for _, row in upcoming_df.iterrows():
+                    # 智能判断：如果没有场地，就不显示 "@"
+                    venue_text = str(row.get('Venue', '')).strip()
+                    venue_display = f" @ {venue_text}" if venue_text else ""
+                    
                     st.markdown(f"""
                     <div class="ins-card" style="border-left: 4px solid {text_color};">
                         <span style="font-size:12px; color:{sub_text};">{row['Date']}</span><br>
-                        <strong>{row['Title']}</strong> <span style="font-size:12px;">@ {row['Venue']}</span>
+                        <strong>{row['Title']}</strong> <span style="font-size:12px;">{venue_display}</span>
                     </div>
                     """, unsafe_allow_html=True)
             else:
@@ -255,7 +276,7 @@ elif menu == "📝 数据录入":
             if raw_text.strip():
                 with st.spinner("解析中..."):
                     try:
-                        url = "[https://api.deepseek.com/v1/chat/completions](https://api.deepseek.com/v1/chat/completions)"
+                        url = "https://api.deepseek.com/v1/chat/completions"
                         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
                         system_prompt = f"""
                         提取演艺消费记录为JSON。今天日期：{current_date.strftime('%Y-%m-%d')}。
@@ -273,7 +294,6 @@ elif menu == "📝 数据录入":
                         response = requests.post(url, json=payload, headers=headers, timeout=30)
                         ai_content = response.json()['choices'][0]['message']['content'].strip()
                         
-                        # 彻底解决复制粘贴引起的 SyntaxError：通过 ASCII 码动态生成反引号字符串
                         backticks = chr(96) * 3 
                         if ai_content.startswith(backticks):
                             ai_content = ai_content.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
