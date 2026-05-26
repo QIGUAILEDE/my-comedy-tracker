@@ -12,13 +12,12 @@ st.set_page_config(page_title="足迹 · 个人文娱看板", page_icon="📓", 
 
 st.sidebar.write("### 🎛️ 空间控制台")
 theme_mode = st.sidebar.selectbox("🌓 视觉主题", ["明亮白天 (Ins Light)", "暗黑静谧 (Ins Dark)"])
-
-current_year_default = datetime.date.today().year
 selected_year = st.sidebar.selectbox("📅 统计年份筛选", [2026, 2025, 2024, 2023, 2022], index=0)
+current_year_default = datetime.date.today().year
 
 if st.sidebar.button("🔄 强制同步最新数据", use_container_width=True):
     st.cache_data.clear()
-    st.sidebar.success("已清除缓存，最新数据加载中...")
+    st.sidebar.success("已穿透缓存，正在从云端拉取最新数据...")
 
 if theme_mode == "明亮白天 (Ins Light)":
     bg_color, card_bg, text_color, sub_text, border_color = "#fafafa", "#ffffff", "#262626", "#8e8e8e", "#dbdbdb"
@@ -39,7 +38,7 @@ st.title("📓 足迹 · 个人文娱日志")
 st.caption(f"当前视窗：{selected_year} 年 | 极简主义数据看板")
 
 # ==========================================
-# 2. 核心数据同步连接
+# 2. 核心数据同步连接 (已修复缓存与报错静默问题)
 # ==========================================
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -51,47 +50,81 @@ CATEGORY_MAP = {
     "🏛️ 音乐剧/舞台剧": "Theater"
 }
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=15)
 def load_all_data():
     data_dict = {}
     for name, sheet_id in CATEGORY_MAP.items():
         try:
-            df = conn.read(worksheet=sheet_id)
-            if not df.empty and 'Date' in df.columns:
-                df = df.dropna(subset=['Title'])
-                df['Date'] = pd.to_datetime(df['Date']).dt.date
-                df['Year'] = pd.to_datetime(df['Date']).dt.year
-                df['Price'] = pd.to_numeric(df['Price'], errors='coerce').fillna(0).astype(int)
-                df['Rating'] = pd.to_numeric(df['Rating'], errors='coerce').fillna(5).astype(int)
-            data_dict[name] = df
-        except Exception:
-            data_dict[name] = pd.DataFrame(columns=['Date', 'Title', 'Artist', 'Venue', 'Price', 'Rating', 'Review', 'Year'])
+            # ttl=0 确保这里的读取不走连接器的老缓存
+            df = conn.read(worksheet=sheet_id, ttl=0)
             
-    # 新增专场数据的读取，包含 Type 和 Format 字段
+            if not df.empty:
+                # 容错处理：清除表头可能存在的前后空格
+                df.columns = df.columns.str.strip()
+                
+                if 'Title' in df.columns and 'Date' in df.columns:
+                    # 不做任何去重操作，连续二刷三刷完全保留。只要有名字就留下。
+                    df = df.dropna(subset=['Title']) 
+                    df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.date
+                    df['Year'] = pd.to_datetime(df['Date'], errors='coerce').dt.year.fillna(current_year_default).astype(int)
+                    df['Price'] = pd.to_numeric(df['Price'], errors='coerce').fillna(0).astype(int)
+                    df['Rating'] = pd.to_numeric(df['Rating'], errors='coerce').fillna(5).astype(int)
+                    data_dict[name] = df
+                else:
+                    st.warning(f"⚠️ 警告：Google Sheet 中的【{sheet_id}】表缺少 'Title' 或 'Date' 列名，请检查第一行表头！")
+                    data_dict[name] = pd.DataFrame()
+            else:
+                data_dict[name] = pd.DataFrame()
+        except Exception as e:
+            st.error(f"❌ 读取【{sheet_id}】表时发生严重错误: {e}")
+            data_dict[name] = pd.DataFrame()
+            
+    # 读取专场数据
     try:
-        df_specials = conn.read(worksheet="Standup_Specials")
+        df_specials = conn.read(worksheet="Standup_Specials", ttl=0)
         if not df_specials.empty:
-            df_specials = df_specials.dropna(subset=['Special_Name'])
-            df_specials['Year'] = pd.to_numeric(df_specials['Year'], errors='coerce').fillna(current_year_default).astype(int)
-        data_dict["Specials"] = df_specials
-    except Exception:
-        data_dict["Specials"] = pd.DataFrame(columns=['Comedian', 'Special_Name', 'Year', 'Type', 'Format', 'Note'])
+            df_specials.columns = df_specials.columns.str.strip()
+            if 'Special_Name' in df_specials.columns:
+                df_specials = df_specials.dropna(subset=['Special_Name'])
+                df_specials['Year'] = pd.to_numeric(df_specials['Year'], errors='coerce').fillna(current_year_default).astype(int)
+                data_dict["Specials"] = df_specials
+            else:
+                st.warning("⚠️ 警告：【Standup_Specials】表缺少 'Special_Name' 列名，请检查表头！")
+                data_dict["Specials"] = pd.DataFrame()
+        else:
+            data_dict["Specials"] = pd.DataFrame()
+    except Exception as e:
+        st.error(f"❌ 读取【Standup_Specials】表时发生严重错误: {e}")
+        data_dict["Specials"] = pd.DataFrame()
         
     return data_dict
 
+# 显式加载数据
 all_data = load_all_data()
-menu = st.sidebar.radio("导航", ["📅 当月日程 & 流水", "📊 类别数据统计", "🎤 单口专场全景统计", "📝 手动录入", "🤖 AI 智能解析录入"])
+
+# ==========================================
+# 3. 导航菜单
+# ==========================================
+menu = st.sidebar.radio("导航", ["📅 当月日程 & 流水", "📊 类别数据统计", "🎤 喜剧演艺全景", "📝 手动录入", "🤖 AI 智能解析录入"])
 
 # ----------------- 模块 1：当月日程 & 流水 -----------------
 if menu == "📅 当月日程 & 流水":
     st.write(f"### 🗓️ {selected_year} 年流动档案")
-    df_list = [df.assign(Category=cat) for cat, df in all_data.items() if cat != "Specials" and not df.empty]
+    df_list = []
+    for cat_name, df in all_data.items():
+        if cat_name != "Specials" and not df.empty:
+            df_copy = df.copy()
+            df_copy['Category'] = cat_name
+            df_list.append(df_copy)
+            
     if df_list:
         total_df = pd.concat(df_list, ignore_index=True)
-        total_df = total_df[total_df['Year'] == selected_year].sort_values(by='Date', ascending=False)
-        current_month, current_year = datetime.date.today().month, datetime.date.today().year
+        total_df = total_df[total_df['Year'] == selected_year]
+        total_df = total_df.sort_values(by='Date', ascending=False)
         
-        if selected_year == current_year:
+        current_month = datetime.date.today().month
+        
+        if selected_year == current_year_default:
             month_df = total_df[pd.to_datetime(total_df['Date']).dt.month == current_month]
             st.write(f"📊 **本月 ({current_month}月) 闪回**")
             if not month_df.empty:
@@ -107,20 +140,22 @@ if menu == "📅 当月日程 & 流水":
             else:
                 st.info("本月还没有留下足迹。")
             st.write("---")
+            
         st.write(f"### 📚 {selected_year} 年全局足迹流")
         if not total_df.empty:
             st.dataframe(total_df[['Date', 'Category', 'Title', 'Artist', 'Venue', 'Price', 'Rating', 'Review']], use_container_width=True)
         else:
             st.info(f"{selected_year} 年暂无数据记录。")
     else:
-        st.info("暂无历史数据。")
+        st.info("尚未读取到有效的历史流水数据，请检查 Google Sheets。")
 
 # ----------------- 模块 2：类别数据统计 -----------------
 elif menu == "📊 类别数据统计":
     st.write(f"### 📈 {selected_year} 年数据深度解构")
     selected_cat = st.selectbox("选择看板分类", list(CATEGORY_MAP.keys()))
-    raw_df = all_data[selected_cat]
-    df = raw_df[raw_df['Year'] == selected_year] if "Year" in raw_df.columns else raw_df
+    raw_df = all_data.get(selected_cat, pd.DataFrame())
+    
+    df = raw_df[raw_df['Year'] == selected_year] if "Year" in raw_df.columns and not raw_df.empty else raw_df
     
     if df.empty:
         st.warning(f"该分类在 {selected_year} 年暂无数据。")
@@ -131,10 +166,10 @@ elif menu == "📊 类别数据统计":
         c3.metric(f"{selected_year} 平均评分", f"{df['Rating'].mean():.1f} ★")
         st.line_chart(df.copy().sort_values('Date').set_index('Date')['Price'], color="#8e8e8e")
 
-# ----------------- 模块 3：🎤 单口专场全景统计 -----------------
-elif menu == "🎤 单口专场全景统计":
+# ----------------- 模块 3：🎤 喜剧演艺全景 -----------------
+elif menu == "🎤 喜剧演艺全景":
     st.write("### 🎤 个人喜剧演艺全景")
-    df_specials = all_data["Specials"]
+    df_specials = all_data.get("Specials", pd.DataFrame())
     year_specials = df_specials[df_specials['Year'] == selected_year] if not df_specials.empty else pd.DataFrame()
     
     c1, c2 = st.columns(2)
@@ -146,7 +181,7 @@ elif menu == "🎤 单口专场全景统计":
         st.write(f"📋 **{selected_year} 年清单**")
         if not year_specials.empty:
             st.dataframe(year_specials[['Comedian', 'Special_Name', 'Type', 'Format', 'Note']], use_container_width=True)
-            st.write("🔥 **高频捕获排行 (包含单口/新喜剧)**")
+            st.write("🔥 **高频捕获排行**")
             st.bar_chart(year_specials['Comedian'].value_counts(), color="#22c55e")
         else:
             st.info(f"{selected_year} 年还没有登记专场。")
@@ -167,15 +202,99 @@ elif menu == "🎤 单口专场全景统计":
                 else:
                     new_sp_row = pd.DataFrame([{"Comedian": sp_comedian, "Special_Name": sp_name, "Year": int(sp_year), "Type": sp_type, "Format": sp_format, "Note": sp_note}])
                     try:
-                        existing_sp = conn.read(worksheet="Standup_Specials").dropna(how='all')
+                        existing_sp = conn.read(worksheet="Standup_Specials", ttl=0).dropna(how='all')
                     except Exception:
                         existing_sp = pd.DataFrame(columns=['Comedian', 'Special_Name', 'Year', 'Type', 'Format', 'Note'])
                     conn.update(worksheet="Standup_Specials", data=pd.concat([existing_sp, new_sp_row], ignore_index=True))
                     st.success("🎉 成就在线解锁！")
                     st.cache_data.clear()
 
-# ----------------- 模块 4 & 5 保持不变 (缩略) -----------------
+# ----------------- 模块 4 & 5 -----------------
 elif menu == "📝 手动录入":
-    st.write("请在常规流水页进行录入...")
+    st.write("### 📝 记录新日常")
+    with st.form("manual_form", clear_on_submit=True):
+        cat_input = st.selectbox("分类", list(CATEGORY_MAP.keys()))
+        col1, col2 = st.columns(2)
+        with col1:
+            date_input = st.date_input("活动日期", datetime.date.today())
+            title_input = st.text_input("名称")
+            artist_input = st.text_input("演职人员/导演")
+        with col2:
+            venue_input = st.text_input("场地/剧院")
+            price_input = st.number_input("花费 (元)", min_value=0, value=0)
+            rating_input = st.slider("评分", 1, 5, 5)
+        review_input = st.text_area("短评回味")
+        
+        if st.form_submit_button("归档至云端"):
+            if not title_input:
+                st.error("请务必填写名称。")
+            else:
+                sheet_name = CATEGORY_MAP[cat_input]
+                new_row = pd.DataFrame([{"Date": date_input.strftime("%Y-%m-%d"), "Title": title_input, "Artist": artist_input, "Venue": venue_input, "Price": price_input, "Rating": rating_input, "Review": review_input}])
+                existing_df = conn.read(worksheet=sheet_name, ttl=0).dropna(how='all')
+                conn.update(worksheet=sheet_name, data=pd.concat([existing_df, new_row], ignore_index=True))
+                st.success("已成功写入 Google Sheets！")
+                st.cache_data.clear()
+
 elif menu == "🤖 AI 智能解析录入":
-    st.write("AI 智能录入模块请参考上一版本的完整实现...")
+    st.write("### 🤖 DeepSeek 智能演艺解析专家")
+    DEEPSEEK_API_KEY = "sk-ae70e2901a1e45eeb84a68fc56f40552"
+    raw_text = st.text_area("请粘贴你的复杂文字信息：", height=180)
+    
+    if st.button("🪄 开始 AI 智能解析"):
+        if not raw_text.strip():
+            st.error("请输入内容。")
+        else:
+            with st.spinner("DeepSeek 正在解析..."):
+                try:
+                    url = "https://api.deepseek.com/v1/chat/completions"
+                    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+                    system_prompt = f"""
+                    你是一个演艺消费数据提取专家。今天日期：{datetime.date.today().strftime('%Y-%m-%d')}。
+                    字段规范：
+                    1. "Category": 必须是：'🎙️ 单口喜剧', '🎭 其他喜剧', '🎬 电影纪录', '🎸 Live/音乐节', '🏛️ 音乐剧/舞台剧'。
+                    2. "Date": 格式 YYYY-MM-DD。
+                    3. "Title": 演出名。
+                    4. "Artist": 艺人/导演。
+                    5. "Venue": 剧场名。
+                    6. "Price": 整数。
+                    7. "Rating": 1-5 整数。
+                    8. "Review": 一句话评论。
+                    输出纯 JSON，不要包裹 ```json 标记。
+                    """
+                    payload = {"model": "deepseek-chat", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": raw_text}], "temperature": 0.1}
+                    response = requests.post(url, json=payload, headers=headers, timeout=30)
+                    ai_content = response.json()['choices'][0]['message']['content'].strip()
+                    if ai_content.startswith("
+```"):
+                        ai_content = ai_content.split("\n", 1)[1].rsplit("\n", 1)[0].strip()
+                    if ai_content.startswith("json"):
+                        ai_content = ai_content[4:].strip()
+                    st.session_state['parsed_data'] = json.loads(ai_content)
+                    st.success("🎯 解析成功！")
+                except Exception as e:
+                    st.error(f"解析失败: {e}")
+                    
+    if 'parsed_data' in st.session_state:
+        data = st.session_state['parsed_data']
+        st.write("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            final_cat = st.selectbox("确认分类", list(CATEGORY_MAP.keys()), index=list(CATEGORY_MAP.keys()).index(data.get('Category', '🎬 电影纪录')))
+            final_date = st.text_input("确认日期", value=data.get('Date', ''))
+            final_title = st.text_input("确认名称", value=data.get('Title', ''))
+            final_artist = st.text_input("确认演职人员", value=data.get('Artist', '未知'))
+        with col2:
+            final_venue = st.text_input("确认场地", value=data.get('Venue', '未知'))
+            final_price = st.number_input("确认票价", value=int(data.get('Price', 0)))
+            final_rating = st.slider("确认评分", 1, 5, int(data.get('Rating', 5)))
+        final_review = st.text_area("确认短评", value=data.get('Review', ''))
+        
+        if st.button("🚀 确认为真，一键同步归库"):
+            sheet_name = CATEGORY_MAP[final_cat]
+            new_row = pd.DataFrame([{"Date": final_date, "Title": final_title, "Artist": final_artist, "Venue": final_venue, "Price": final_price, "Rating": final_rating, "Review": final_review}])
+            existing_df = conn.read(worksheet=sheet_name, ttl=0).dropna(how='all')
+            conn.update(worksheet=sheet_name, data=pd.concat([existing_df, new_row], ignore_index=True))
+            st.success("数据已成功录入！")
+            del st.session_state['parsed_data']
+            st.cache_data.clear()
