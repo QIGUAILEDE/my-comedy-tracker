@@ -38,7 +38,7 @@ st.title("📓 足迹 · 个人文娱日志")
 st.caption(f"当前视窗：{selected_year} 年 | 极简主义数据看板")
 
 # ==========================================
-# 2. 核心数据同步连接 (已修复缓存与报错静默问题)
+# 2. 核心数据同步连接
 # ==========================================
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -55,15 +55,10 @@ def load_all_data():
     data_dict = {}
     for name, sheet_id in CATEGORY_MAP.items():
         try:
-            # ttl=0 确保这里的读取不走连接器的老缓存
             df = conn.read(worksheet=sheet_id, ttl=0)
-            
             if not df.empty:
-                # 容错处理：清除表头可能存在的前后空格
                 df.columns = df.columns.str.strip()
-                
                 if 'Title' in df.columns and 'Date' in df.columns:
-                    # 不做任何去重操作，连续二刷三刷完全保留。只要有名字就留下。
                     df = df.dropna(subset=['Title']) 
                     df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.date
                     df['Year'] = pd.to_datetime(df['Date'], errors='coerce').dt.year.fillna(current_year_default).astype(int)
@@ -76,10 +71,9 @@ def load_all_data():
             else:
                 data_dict[name] = pd.DataFrame()
         except Exception as e:
-            st.error(f"❌ 读取【{sheet_id}】表时发生严重错误: {e}")
+            st.error(f"❌ 读取【{sheet_id}】表时发生错误: {e}")
             data_dict[name] = pd.DataFrame()
             
-    # 读取专场数据
     try:
         df_specials = conn.read(worksheet="Standup_Specials", ttl=0)
         if not df_specials.empty:
@@ -94,12 +88,11 @@ def load_all_data():
         else:
             data_dict["Specials"] = pd.DataFrame()
     except Exception as e:
-        st.error(f"❌ 读取【Standup_Specials】表时发生严重错误: {e}")
+        st.error(f"❌ 读取【Standup_Specials】表时发生错误: {e}")
         data_dict["Specials"] = pd.DataFrame()
         
     return data_dict
 
-# 显式加载数据
 all_data = load_all_data()
 
 # ==========================================
@@ -209,7 +202,7 @@ elif menu == "🎤 喜剧演艺全景":
                     st.success("🎉 成就在线解锁！")
                     st.cache_data.clear()
 
-# ----------------- 模块 4 & 5 -----------------
+# ----------------- 模块 4 -----------------
 elif menu == "📝 手动录入":
     st.write("### 📝 记录新日常")
     with st.form("manual_form", clear_on_submit=True):
@@ -236,6 +229,7 @@ elif menu == "📝 手动录入":
                 st.success("已成功写入 Google Sheets！")
                 st.cache_data.clear()
 
+# ----------------- 模块 5 -----------------
 elif menu == "🤖 AI 智能解析录入":
     st.write("### 🤖 DeepSeek 智能演艺解析专家")
     DEEPSEEK_API_KEY = "sk-ae70e2901a1e45eeb84a68fc56f40552"
@@ -247,7 +241,7 @@ elif menu == "🤖 AI 智能解析录入":
         else:
             with st.spinner("DeepSeek 正在解析..."):
                 try:
-                    url = "https://api.deepseek.com/v1/chat/completions"
+                    url = "[https://api.deepseek.com/v1/chat/completions](https://api.deepseek.com/v1/chat/completions)"
                     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
                     system_prompt = f"""
                     你是一个演艺消费数据提取专家。今天日期：{datetime.date.today().strftime('%Y-%m-%d')}。
@@ -260,16 +254,18 @@ elif menu == "🤖 AI 智能解析录入":
                     6. "Price": 整数。
                     7. "Rating": 1-5 整数。
                     8. "Review": 一句话评论。
-                    输出纯 JSON，不要包裹 ```json 标记。
+                    输出纯 JSON，不要包含 Markdown 代码块标记。
                     """
                     payload = {"model": "deepseek-chat", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": raw_text}], "temperature": 0.1}
                     response = requests.post(url, json=payload, headers=headers, timeout=30)
                     ai_content = response.json()['choices'][0]['message']['content'].strip()
-                    if ai_content.startswith("
-```"):
-                        ai_content = ai_content.split("\n", 1)[1].rsplit("\n", 1)[0].strip()
-                    if ai_content.startswith("json"):
+                    
+                    # 修复截断报错的元凶：改用单引号替换双引号包裹 Markdown 反引号
+                    if ai_content.startswith('```'):
+                        ai_content = ai_content.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
+                    if ai_content.startswith('json'):
                         ai_content = ai_content[4:].strip()
+                        
                     st.session_state['parsed_data'] = json.loads(ai_content)
                     st.success("🎯 解析成功！")
                 except Exception as e:
