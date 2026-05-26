@@ -8,16 +8,46 @@ import calendar
 import plotly.express as px
 
 # ==========================================
-# 1. 全局配置与视觉主题
+# 1. 全局配置与状态初始化
 # ==========================================
 st.set_page_config(page_title="奇怪了的观演记录和备忘录", page_icon="📓", layout="wide")
 
-st.sidebar.write("### 🎛️ 控制台")
-theme_mode = st.sidebar.selectbox("🌓 视觉主题", ["明亮白天 (Ins Light)", "暗黑静谧 (Ins Dark)"])
-selected_year = st.sidebar.selectbox("📅 年份筛选", [2026, 2025, 2024, 2023, 2022], index=0)
+# 初始化当前系统时间
 current_date = datetime.date.today()
 
-if st.sidebar.button("🔄 同步数据", use_container_width=True):
+# 初始化日历的 Session State（用于记录当前查看的年月）
+if 'cal_year' not in st.session_state:
+    st.session_state.cal_year = current_date.year
+if 'cal_month' not in st.session_state:
+    st.session_state.cal_month = current_date.month
+
+# 日历导航回调函数
+def prev_month():
+    if st.session_state.cal_month == 1:
+        st.session_state.cal_month = 12
+        st.session_state.cal_year -= 1
+    else:
+        st.session_state.cal_month -= 1
+
+def next_month():
+    if st.session_state.cal_month == 12:
+        st.session_state.cal_month = 1
+        st.session_state.cal_year += 1
+    else:
+        st.session_state.cal_month += 1
+
+def go_today():
+    st.session_state.cal_year = current_date.year
+    st.session_state.cal_month = current_date.month
+
+# ==========================================
+# 2. 视觉主题与 CSS 注入 (重点修复移动端日历)
+# ==========================================
+st.sidebar.write("### 🎛️ 控制台")
+theme_mode = st.sidebar.selectbox("🌓 视觉主题", ["明亮白天 (Ins Light)", "暗黑静谧 (Ins Dark)"])
+selected_year = st.sidebar.selectbox("📅 年份筛选 (统计页)", [2026, 2025, 2024, 2023, 2022], index=0)
+
+if st.sidebar.button("🔄 同步云端数据", use_container_width=True):
     st.cache_data.clear()
     st.sidebar.success("已拉取云端最新数据")
 
@@ -28,23 +58,49 @@ else:
     bg_color, card_bg, text_color, sub_text, border_color = "#121212", "#1c1c1e", "#f5f5f5", "#767676", "#262626"
     chart_template = "plotly_dark"
 
+# 注入 CSS 黑科技：强制移动端 7 列不换行
 st.markdown(f"""
 <style>
     .stApp {{ background-color: {bg_color}; color: {text_color}; font-family: -apple-system, sans-serif; }}
     h1 {{ color: {text_color} !important; font-weight: 700 !important; font-size: 26px !important; padding-bottom: 5px; }}
     h2, h3 {{ color: {text_color} !important; font-weight: 600 !important; font-size: 18px !important; margin-top: 10px !important; }}
+    .ins-card {{ background-color: {card_bg}; border: 1px solid {border_color}; padding: 15px; border-radius: 6px; margin-bottom: 10px; }}
+    .ins-tag {{ display: inline-block; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px; background-color: {border_color}; color: {text_color}; margin-right: 6px; }}
     .stTabs [data-baseweb="tab-list"] {{ gap: 20px; }}
     .stTabs [data-baseweb="tab"] {{ color: {sub_text}; font-weight: 600; }}
     .stTabs [aria-selected="true"] {{ color: {text_color} !important; border-bottom: 2px solid {text_color} !important; }}
-    /* 优化折叠面板UI，使其看起来像高级卡片 */
     [data-testid="stExpander"] {{ border: 1px solid {border_color} !important; border-radius: 8px !important; background-color: {card_bg} !important; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }}
+    
+    /* 📱 移动端 Safari 终极适配：识别恰好有7个子元素的横向区块，强制其水平排列 */
+    @media (max-width: 768px) {{
+        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(7):last-child) {{
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            gap: 2px !important;
+        }}
+        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(7):last-child) > div[data-testid="column"] {{
+            width: calc(100% / 7) !important;
+            min-width: calc(100% / 7) !important;
+            flex: 1 1 calc(100% / 7) !important;
+        }}
+        /* 压缩日历按钮在手机上的内边距，防止内容撑爆 */
+        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(7):last-child) button {{
+            padding: 2px !important;
+            font-size: 14px !important;
+            min-height: 45px !important;
+        }}
+        /* 隐藏日历表头的多余 padding */
+        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(7):last-child) div[data-testid="stMarkdownContainer"] {{
+            padding: 0 !important;
+        }}
+    }}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("奇怪了的观演记录和备忘录")
 
 # ==========================================
-# 2. 核心数据同步与全局操作函数
+# 3. 核心数据同步
 # ==========================================
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -55,7 +111,6 @@ CATEGORY_MAP = {
     "🎸 Live/音乐节": "Live_Music",
     "🏛️ 音乐剧/舞台剧": "Theater"
 }
-
 COLOR_MAP = {
     "🎙️ 单口喜剧": "🟣", "🎭 其他喜剧": "🟡", "🎬 电影纪录": "🔵",
     "🎸 Live/音乐节": "🔴", "🏛️ 音乐剧/舞台剧": "🟢"
@@ -75,11 +130,9 @@ def load_all_data():
                     df['Year'] = pd.to_datetime(df['Date'], errors='coerce').dt.year.fillna(current_date.year).astype(int)
                     df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
                     df['Rating'] = pd.to_numeric(df['Rating'], errors='coerce')
-                    
                     for col in ['Artist', 'Venue', 'Review']:
                         if col in df.columns:
                             df[col] = df[col].fillna("").astype(str).replace("nan", "")
-                            
                     data_dict[name] = df
                 else:
                     data_dict[name] = pd.DataFrame()
@@ -105,15 +158,11 @@ def load_all_data():
         
     return data_dict
 
-# 🚀 核心写库逻辑：定位并更新原始数据
 def update_record(old_cat, old_date, old_title, new_cat, new_date, new_title, new_artist, new_venue, new_price, new_rating, new_review):
     old_sheet = CATEGORY_MAP[old_cat]
     new_sheet = CATEGORY_MAP[new_cat]
-    
     df_old = conn.read(worksheet=old_sheet, ttl=0)
     df_old.columns = df_old.columns.str.strip()
-    
-    # 锁定要修改的那一行 (通过日期和标题匹配)
     df_old_dates = pd.to_datetime(df_old['Date'], errors='coerce').dt.date
     mask = (df_old_dates == old_date) & (df_old['Title'] == old_title)
     
@@ -128,25 +177,19 @@ def update_record(old_cat, old_date, old_title, new_cat, new_date, new_title, ne
     }
     
     if old_sheet == new_sheet:
-        # 同一分类内直接修改
         for k, v in new_row_data.items():
             df_old.loc[mask, k] = v
         conn.update(worksheet=old_sheet, data=df_old)
     else:
-        # 跨分类移动：先从旧表删除，再追加到新表
         df_old_kept = df_old[~mask]
         conn.update(worksheet=old_sheet, data=df_old_kept)
-        
         df_new = conn.read(worksheet=new_sheet, ttl=0)
         df_new.columns = df_new.columns.str.strip()
         df_new = pd.concat([df_new, pd.DataFrame([new_row_data])], ignore_index=True)
         conn.update(worksheet=new_sheet, data=df_new)
-        
     st.cache_data.clear()
 
-# 🎨 统一的卡片渲染组件（展示详情 + 编辑表单）
 def render_event_details_and_edit(row, unique_key):
-    # 1. 静态信息展示
     price_display = f"¥{int(row['Price'])}" if pd.notnull(row['Price']) else "无价格"
     rating_display = f"{'★'*int(row['Rating'])}" if pd.notnull(row['Rating']) else "未评分"
     venue_text = str(row.get('Venue', '')).strip()
@@ -158,10 +201,8 @@ def render_event_details_and_edit(row, unique_key):
     if venue_text: st.write(f"📍 **场地:** {venue_text}")
     st.write(f"🏷️ **{price_display}** &nbsp;|&nbsp; ⭐ **{rating_display}**")
     if review_text: st.info(f"💬 {review_text}")
-    
     st.divider()
     
-    # 2. 可折叠的超级编辑表单
     with st.expander("✏️ 修改 / 补全信息"):
         with st.form(f"edit_form_{unique_key}"):
             f_cat = st.selectbox("分类", list(CATEGORY_MAP.keys()), index=list(CATEGORY_MAP.keys()).index(row['Category']))
@@ -173,24 +214,17 @@ def render_event_details_and_edit(row, unique_key):
             with c2:
                 f_venue = st.text_input("场地", venue_text)
                 f_price = st.number_input("票价 (元)", value=row.get('Price') if pd.notnull(row.get('Price')) else None)
-                
                 r_val = row.get('Rating')
                 r_idx = [None, 1, 2, 3, 4, 5].index(r_val) if r_val in [1, 2, 3, 4, 5] else 0
                 f_rating = st.selectbox("评分", [None, 1, 2, 3, 4, 5], index=r_idx)
-                
             f_review = st.text_area("短评", review_text)
-            
             if st.form_submit_button("💾 保存同步至云端", type="primary", use_container_width=True):
-                update_record(
-                    old_cat=row['Category'], old_date=row['Date'], old_title=row['Title'],
-                    new_cat=f_cat, new_date=f_date, new_title=f_title, new_artist=f_artist,
-                    new_venue=f_venue, new_price=f_price, new_rating=f_rating, new_review=f_review
-                )
+                update_record(row['Category'], row['Date'], row['Title'], f_cat, f_date, f_title, f_artist, f_venue, f_price, f_rating, f_review)
                 st.success("数据已更新！")
                 st.rerun()
 
 all_data = load_all_data()
-menu = st.sidebar.radio("菜单", ["📅 当月日程", "📊 数据统计", "🎤 单口喜剧专场记录", "📝 数据录入"])
+menu = st.sidebar.radio("菜单", ["📅 日程排期", "📊 数据统计", "🎤 单口喜剧专场记录", "📝 数据录入"])
 
 df_list = []
 for cat_name, df in all_data.items():
@@ -201,20 +235,31 @@ for cat_name, df in all_data.items():
         
 total_df = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
 
-# ----------------- 模块 1：当月日程 -----------------
-if menu == "📅 当月日程":
+# ----------------- 模块 1：日程排期 (日历+推流) -----------------
+if menu == "📅 日程排期":
     if not total_df.empty:
-        st.write(f"### 📅 {current_date.year} 年 {current_date.month} 月 日历")
+        # 1. 动态日历头（带导航栏）
+        col1, col2, col3, col4 = st.columns([1, 2, 1, 1])
+        with col1:
+            st.button("⬅️ 上个月", on_click=prev_month, use_container_width=True)
+        with col2:
+            st.markdown(f"<h3 style='text-align:center; margin-top:5px;'>📅 {st.session_state.cal_year} 年 {st.session_state.cal_month} 月</h3>", unsafe_allow_html=True)
+        with col3:
+            st.button("下个月 ➡️", on_click=next_month, use_container_width=True)
+        with col4:
+            st.button("🏠 回本月", on_click=go_today, use_container_width=True)
+
+        st.write("") # 留白
         
-        month_df = total_df[(pd.to_datetime(total_df['Date']).dt.month == current_date.month) & 
-                            (pd.to_datetime(total_df['Date']).dt.year == current_date.year)]
-        
-        cal = calendar.monthcalendar(current_date.year, current_date.month)
+        # 2. 渲染日历网格
+        month_df = total_df[(pd.to_datetime(total_df['Date']).dt.month == st.session_state.cal_month) & 
+                            (pd.to_datetime(total_df['Date']).dt.year == st.session_state.cal_year)]
+        cal = calendar.monthcalendar(st.session_state.cal_year, st.session_state.cal_month)
         days_of_week = ["一", "二", "三", "四", "五", "六", "日"]
         
         cols = st.columns(7)
         for i, day in enumerate(days_of_week):
-            cols[i].markdown(f"<div style='text-align:center; color:{sub_text}; font-size:14px;'>{day}</div>", unsafe_allow_html=True)
+            cols[i].markdown(f"<div style='text-align:center; color:{sub_text}; font-size:13px; font-weight:600;'>{day}</div>", unsafe_allow_html=True)
             
         for week in cal:
             cols = st.columns(7)
@@ -222,14 +267,14 @@ if menu == "📅 当月日程":
                 if day == 0:
                     cols[i].write("")
                 else:
-                    target_date = datetime.date(current_date.year, current_date.month, day)
+                    target_date = datetime.date(st.session_state.cal_year, st.session_state.cal_month, day)
                     events_today = month_df[month_df['Date'] == target_date]
                     
                     if not events_today.empty:
+                        # 生成带有换行的文字+圆点组合，适配移动端按钮高度
                         dots = "".join([COLOR_MAP.get(row['Category'], "⚪") for _, row in events_today.iterrows()])
                         with cols[i].popover(f"{day}\n{dots}", use_container_width=True):
                             for idx, row in events_today.iterrows():
-                                # 日历弹窗内嵌可折叠编辑卡片
                                 with st.expander(f"✨ {row['Title']}", expanded=True):
                                     render_event_details_and_edit(row, f"cal_{idx}")
                     else:
@@ -237,6 +282,7 @@ if menu == "📅 当月日程":
         
         st.write("---")
         
+        # 3. 推流模块
         left_col, right_col = st.columns(2)
         with left_col:
             st.write("### 🔜 即将出发")
@@ -245,7 +291,6 @@ if menu == "📅 当月日程":
                 for idx, row in upcoming_df.iterrows():
                     venue_text = str(row.get('Venue', '')).strip()
                     venue_display = f" @ {venue_text}" if venue_text else ""
-                    # 使用原生扩展器替换静态卡片
                     with st.expander(f"📌 {row['Date']} | **{row['Title']}**{venue_display}"):
                         render_event_details_and_edit(row, f"up_{idx}")
             else:
@@ -281,7 +326,6 @@ elif menu == "📊 数据统计":
             
             st.write("---")
             col_chart1, col_chart2 = st.columns(2)
-            
             with col_chart1:
                 cat_counts = year_df['Category'].value_counts().reset_index()
                 cat_counts.columns = ['Category', 'Count']
@@ -354,13 +398,11 @@ elif menu == "📝 数据录入":
                         payload = {"model": "deepseek-chat", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": raw_text}], "temperature": 0.1}
                         response = requests.post(url, json=payload, headers=headers, timeout=30)
                         ai_content = response.json()['choices'][0]['message']['content'].strip()
-                        
                         backticks = chr(96) * 3 
                         if ai_content.startswith(backticks):
                             ai_content = ai_content.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
                         if ai_content.startswith("json"):
                             ai_content = ai_content[4:].strip()
-                            
                         st.session_state['parsed_data'] = json.loads(ai_content)
                     except Exception as e:
                         st.error("解析失败，请检查输入或 API 状态。")
