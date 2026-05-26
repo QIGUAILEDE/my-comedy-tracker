@@ -12,16 +12,14 @@ import plotly.express as px
 # ==========================================
 st.set_page_config(page_title="奇怪了的观演记录和备忘录", page_icon="📓", layout="wide")
 
-# 初始化当前系统时间
 current_date = datetime.date.today()
 
-# 初始化日历的 Session State（用于记录当前查看的年月）
+# 初始化日历的时间穿梭状态
 if 'cal_year' not in st.session_state:
     st.session_state.cal_year = current_date.year
 if 'cal_month' not in st.session_state:
     st.session_state.cal_month = current_date.month
 
-# 日历导航回调函数
 def prev_month():
     if st.session_state.cal_month == 1:
         st.session_state.cal_month = 12
@@ -41,9 +39,13 @@ def go_today():
     st.session_state.cal_month = current_date.month
 
 # ==========================================
-# 2. 视觉主题与 CSS 注入 (重点修复移动端日历)
+# 2. 视觉主题与控制台
 # ==========================================
 st.sidebar.write("### 🎛️ 控制台")
+# 🚀 新增：彻底解决手机适配的核心开关
+view_mode = st.sidebar.radio("📱 视图排版 (解决手机拥挤)", ["💻 桌面大屏 (网格)", "📱 手机竖屏 (时间轴)"])
+st.sidebar.write("---")
+
 theme_mode = st.sidebar.selectbox("🌓 视觉主题", ["明亮白天 (Ins Light)", "暗黑静谧 (Ins Dark)"])
 selected_year = st.sidebar.selectbox("📅 年份筛选 (统计页)", [2026, 2025, 2024, 2023, 2022], index=0)
 
@@ -58,7 +60,7 @@ else:
     bg_color, card_bg, text_color, sub_text, border_color = "#121212", "#1c1c1e", "#f5f5f5", "#767676", "#262626"
     chart_template = "plotly_dark"
 
-# 注入 CSS 黑科技：强制移动端 7 列不换行
+# 剥离容易引发报错的劣质 CSS，保留核心美化
 st.markdown(f"""
 <style>
     .stApp {{ background-color: {bg_color}; color: {text_color}; font-family: -apple-system, sans-serif; }}
@@ -70,37 +72,13 @@ st.markdown(f"""
     .stTabs [data-baseweb="tab"] {{ color: {sub_text}; font-weight: 600; }}
     .stTabs [aria-selected="true"] {{ color: {text_color} !important; border-bottom: 2px solid {text_color} !important; }}
     [data-testid="stExpander"] {{ border: 1px solid {border_color} !important; border-radius: 8px !important; background-color: {card_bg} !important; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }}
-    
-    /* 📱 移动端 Safari 终极适配：识别恰好有7个子元素的横向区块，强制其水平排列 */
-    @media (max-width: 768px) {{
-        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(7):last-child) {{
-            flex-direction: row !important;
-            flex-wrap: nowrap !important;
-            gap: 2px !important;
-        }}
-        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(7):last-child) > div[data-testid="column"] {{
-            width: calc(100% / 7) !important;
-            min-width: calc(100% / 7) !important;
-            flex: 1 1 calc(100% / 7) !important;
-        }}
-        /* 压缩日历按钮在手机上的内边距，防止内容撑爆 */
-        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(7):last-child) button {{
-            padding: 2px !important;
-            font-size: 14px !important;
-            min-height: 45px !important;
-        }}
-        /* 隐藏日历表头的多余 padding */
-        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(7):last-child) div[data-testid="stMarkdownContainer"] {{
-            padding: 0 !important;
-        }}
-    }}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("奇怪了的观演记录和备忘录")
 
 # ==========================================
-# 3. 核心数据同步
+# 3. 核心数据拉取
 # ==========================================
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -235,10 +213,10 @@ for cat_name, df in all_data.items():
         
 total_df = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
 
-# ----------------- 模块 1：日程排期 (日历+推流) -----------------
+# ----------------- 模块 1：日程排期 (双端适配 + 月份穿梭) -----------------
 if menu == "📅 日程排期":
     if not total_df.empty:
-        # 1. 动态日历头（带导航栏）
+        # 1. 动态日历头（带月份穿梭导航）
         col1, col2, col3, col4 = st.columns([1, 2, 1, 1])
         with col1:
             st.button("⬅️ 上个月", on_click=prev_month, use_container_width=True)
@@ -249,40 +227,64 @@ if menu == "📅 日程排期":
         with col4:
             st.button("🏠 回本月", on_click=go_today, use_container_width=True)
 
-        st.write("") # 留白
-        
-        # 2. 渲染日历网格
-        month_df = total_df[(pd.to_datetime(total_df['Date']).dt.month == st.session_state.cal_month) & 
-                            (pd.to_datetime(total_df['Date']).dt.year == st.session_state.cal_year)]
-        cal = calendar.monthcalendar(st.session_state.cal_year, st.session_state.cal_month)
-        days_of_week = ["一", "二", "三", "四", "五", "六", "日"]
-        
-        cols = st.columns(7)
-        for i, day in enumerate(days_of_week):
-            cols[i].markdown(f"<div style='text-align:center; color:{sub_text}; font-size:13px; font-weight:600;'>{day}</div>", unsafe_allow_html=True)
-            
-        for week in cal:
-            cols = st.columns(7)
-            for i, day in enumerate(week):
-                if day == 0:
-                    cols[i].write("")
-                else:
-                    target_date = datetime.date(st.session_state.cal_year, st.session_state.cal_month, day)
-                    events_today = month_df[month_df['Date'] == target_date]
-                    
-                    if not events_today.empty:
-                        # 生成带有换行的文字+圆点组合，适配移动端按钮高度
-                        dots = "".join([COLOR_MAP.get(row['Category'], "⚪") for _, row in events_today.iterrows()])
-                        with cols[i].popover(f"{day}\n{dots}", use_container_width=True):
-                            for idx, row in events_today.iterrows():
-                                with st.expander(f"✨ {row['Title']}", expanded=True):
-                                    render_event_details_and_edit(row, f"cal_{idx}")
-                    else:
-                        cols[i].button(f"{day}", key=f"day_{target_date}", disabled=True, use_container_width=True)
-        
         st.write("---")
         
-        # 3. 推流模块
+        # 获取当前穿梭目标月份的数据
+        month_df = total_df[(pd.to_datetime(total_df['Date']).dt.month == st.session_state.cal_month) & 
+                            (pd.to_datetime(total_df['Date']).dt.year == st.session_state.cal_year)]
+        
+        # 💻 视图分支 1：电脑网格版
+        if view_mode == "💻 桌面大屏 (网格)":
+            cal = calendar.monthcalendar(st.session_state.cal_year, st.session_state.cal_month)
+            days_of_week = ["一", "二", "三", "四", "五", "六", "日"]
+            
+            cols = st.columns(7)
+            for i, day in enumerate(days_of_week):
+                cols[i].markdown(f"<div style='text-align:center; color:{sub_text}; font-size:14px; font-weight:600;'>{day}</div>", unsafe_allow_html=True)
+                
+            for week in cal:
+                cols = st.columns(7)
+                for i, day in enumerate(week):
+                    if day == 0:
+                        cols[i].write("")
+                    else:
+                        target_date = datetime.date(st.session_state.cal_year, st.session_state.cal_month, day)
+                        events_today = month_df[month_df['Date'] == target_date]
+                        
+                        if not events_today.empty:
+                            dots = "".join([COLOR_MAP.get(row['Category'], "⚪") for _, row in events_today.iterrows()])
+                            with cols[i].popover(f"{day}\n{dots}", use_container_width=True):
+                                for idx, row in events_today.iterrows():
+                                    with st.expander(f"✨ {row['Title']}", expanded=True):
+                                        render_event_details_and_edit(row, f"cal_{idx}")
+                        else:
+                            cols[i].button(f"{day}", key=f"day_{target_date}", disabled=True, use_container_width=True)
+        
+        # 📱 视图分支 2：手机时间轴版
+        else:
+            if month_df.empty:
+                st.info(f"{st.session_state.cal_month}月 暂无日程安排，快去添加吧！")
+            else:
+                # 必须将本月数据按时间先后顺序排列
+                month_df_sorted = month_df.sort_values(by="Date")
+                grouped = month_df_sorted.groupby('Date')
+                
+                for date_val, group in grouped:
+                    weekday_str = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][date_val.weekday()]
+                    # 精美的日期分隔头
+                    st.markdown(f"<div style='margin-top:15px; margin-bottom:10px; color:{sub_text}; font-size:16px; font-weight:bold; border-bottom:1px solid {border_color}; padding-bottom:5px;'>📆 {date_val.day}日 ({weekday_str})</div>", unsafe_allow_html=True)
+                    
+                    for idx, row in group.iterrows():
+                        dots = COLOR_MAP.get(row['Category'], "⚪")
+                        venue_text = str(row.get('Venue', '')).strip()
+                        venue_display = f" @ {venue_text}" if venue_text else ""
+                        # 直接把展开面板当成列表卡片用，体验拉满
+                        with st.expander(f"{dots} **{row['Title']}**{venue_display}"):
+                            render_event_details_and_edit(row, f"mob_cal_{idx}")
+
+        st.write("---")
+        
+        # 3. 智能推流模块
         left_col, right_col = st.columns(2)
         with left_col:
             st.write("### 🔜 即将出发")
@@ -398,11 +400,13 @@ elif menu == "📝 数据录入":
                         payload = {"model": "deepseek-chat", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": raw_text}], "temperature": 0.1}
                         response = requests.post(url, json=payload, headers=headers, timeout=30)
                         ai_content = response.json()['choices'][0]['message']['content'].strip()
+                        
                         backticks = chr(96) * 3 
                         if ai_content.startswith(backticks):
                             ai_content = ai_content.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
                         if ai_content.startswith("json"):
                             ai_content = ai_content[4:].strip()
+                            
                         st.session_state['parsed_data'] = json.loads(ai_content)
                     except Exception as e:
                         st.error("解析失败，请检查输入或 API 状态。")
