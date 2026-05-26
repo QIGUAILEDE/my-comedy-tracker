@@ -39,7 +39,7 @@ def go_today():
     st.session_state.cal_month = current_date.month
 
 # ==========================================
-# 2. 视觉主题与响应式 CSS 架构
+# 2. 视觉主题与 CSS 终极兼容架构
 # ==========================================
 st.sidebar.write("### 🎛️ 控制台")
 theme_mode = st.sidebar.selectbox("🌓 视觉主题", ["明亮白天 (Ins Light)", "暗黑静谧 (Ins Dark)"])
@@ -56,6 +56,7 @@ else:
     bg_color, card_bg, text_color, sub_text, border_color = "#121212", "#1c1c1e", "#f5f5f5", "#767676", "#262626"
     chart_template = "plotly_dark"
 
+# 🚀 降维兼容版 CSS：彻底解决 Safari 堆叠问题，打造 Apple Calendar 质感
 st.markdown(f"""
 <style>
     .stApp {{ background-color: {bg_color}; color: {text_color}; font-family: -apple-system, sans-serif; }}
@@ -67,11 +68,27 @@ st.markdown(f"""
     .stTabs [aria-selected="true"] {{ color: {text_color} !important; border-bottom: 2px solid {text_color} !important; }}
     [data-testid="stExpander"] {{ border: 1px solid {border_color} !important; border-radius: 8px !important; background-color: {card_bg} !important; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }}
     
-    @media (min-width: 800px) {{
-        .mobile-timeline {{ display: none !important; }}
+    /* 导航栏强制横向，高度居中 */
+    .nav-marker + div[data-testid="stHorizontalBlock"] {{
+        flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important;
     }}
-    @media (max-width: 799px) {{
-        .desktop-calendar {{ display: none !important; }}
+    .nav-marker + div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {{ min-width: 0 !important; }}
+    
+    /* 日历 7宫格 强制不换行 (100% 兼容所有手机浏览器) */
+    .cal-marker + div[data-testid="stHorizontalBlock"] {{
+        flex-direction: row !important; flex-wrap: nowrap !important; gap: 2px !important;
+    }}
+    .cal-marker + div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {{
+        width: 14.28% !important; flex: 1 1 14.28% !important; min-width: 0 !important; padding: 0 !important;
+    }}
+    /* 日历内按钮扁平化、紧凑化设计 */
+    .cal-marker + div[data-testid="stHorizontalBlock"] button {{
+        padding: 0 !important; height: 42px !important; min-height: 42px !important; 
+        font-size: 14px !important; border-radius: 8px !important; width: 100% !important;
+        border: none !important; background-color: transparent !important;
+    }}
+    .cal-marker + div[data-testid="stHorizontalBlock"] button:hover {{
+        background-color: {border_color} !important;
     }}
 </style>
 """, unsafe_allow_html=True)
@@ -171,72 +188,78 @@ menu = st.sidebar.radio("菜单", ["📅 日程排期", "📊 数据统计", "�
 df_list = [df.assign(Category=cat) for cat, df in all_data.items() if cat != "Specials" and not df.empty]
 total_df = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
 
-# ----------------- 模块 1：日程排期 -----------------
+# ----------------- 模块 1：日程排期 (原生网格 + 距离优先排序) -----------------
 if menu == "📅 日程排期":
     if not total_df.empty:
-        col1, col2, col3, col4 = st.columns([1, 2, 1, 1])
-        with col1: st.button("⬅️ 上个月", on_click=prev_month, use_container_width=True)
-        with col2: st.markdown(f"<h3 style='text-align:center; margin-top:5px;'>📅 {st.session_state.cal_year} 年 {st.session_state.cal_month} 月</h3>", unsafe_allow_html=True)
-        with col3: st.button("下个月 ➡️", on_click=next_month, use_container_width=True)
-        with col4: st.button("🏠 回本月", on_click=go_today, use_container_width=True)
-        st.write("---")
+        # 1. 极简导航栏 (利用 nav-marker 强制同行)
+        st.markdown('<div class="nav-marker" style="display:none;"></div>', unsafe_allow_html=True)
+        col1, col2, col3, col4 = st.columns([1.5, 4, 1.5, 1.5])
+        with col1: st.button("⬅️", on_click=prev_month, use_container_width=True)
+        with col2: st.markdown(f"<h3 style='text-align:center; margin-top:5px; font-size:18px;'>{st.session_state.cal_year}年{st.session_state.cal_month}月</h3>", unsafe_allow_html=True)
+        with col3: st.button("➡️", on_click=next_month, use_container_width=True)
+        with col4: st.button("🏠", on_click=go_today, use_container_width=True)
         
+        st.write("")
         month_df = total_df[(pd.to_datetime(total_df['Date']).dt.month == st.session_state.cal_month) & (pd.to_datetime(total_df['Date']).dt.year == st.session_state.cal_year)]
         
-        # 1. 桌面专属 UI：网格日历
-        st.markdown('<div class="desktop-calendar">', unsafe_allow_html=True)
+        # 2. Apple 日历风格 7 宫格网格 (利用 cal-marker 强制同行)
         cal = calendar.monthcalendar(st.session_state.cal_year, st.session_state.cal_month)
+        
+        # 表头
+        st.markdown('<div class="cal-marker" style="display:none;"></div>', unsafe_allow_html=True)
         cols = st.columns(7)
         for i, day in enumerate(["一", "二", "三", "四", "五", "六", "日"]):
-            cols[i].markdown(f"<div style='text-align:center; color:{sub_text}; font-size:14px; font-weight:600;'>{day}</div>", unsafe_allow_html=True)
+            cols[i].markdown(f"<div style='text-align:center; color:{sub_text}; font-size:12px;'>{day}</div>", unsafe_allow_html=True)
+            
+        # 每一周
         for week in cal:
+            st.markdown('<div class="cal-marker" style="display:none;"></div>', unsafe_allow_html=True)
             cols = st.columns(7)
             for i, day in enumerate(week):
-                if day == 0: cols[i].write("")
+                if day == 0: 
+                    cols[i].markdown("<div style='height:42px;'></div>", unsafe_allow_html=True) # 占位防塌陷
                 else:
                     target_date = datetime.date(st.session_state.cal_year, st.session_state.cal_month, day)
                     events = month_df[month_df['Date'] == target_date]
                     if not events.empty:
+                        # 用圆点表示当天的活动
                         dots = "".join([COLOR_MAP.get(r['Category'], "⚪") for _, r in events.iterrows()])
+                        # 当天有演出，高亮并允许点击
                         with cols[i].popover(f"{day}\n{dots}", use_container_width=True):
                             for idx, r in events.iterrows():
                                 with st.expander(f"✨ {r['Title']}", expanded=True): render_event_details_and_edit(r, f"d_{idx}")
-                    else: cols[i].button(f"{day}", key=f"d_{target_date}", disabled=True, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # 2. 手机专属 UI：垂直时间轴
-        st.markdown('<div class="mobile-timeline">', unsafe_allow_html=True)
-        if month_df.empty:
-            st.info(f"{st.session_state.cal_month}月 暂无日程安排。")
-        else:
-            for date_val, group in month_df.sort_values(by="Date").groupby('Date'):
-                ws = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][date_val.weekday()]
-                st.markdown(f"<div style='margin-top:15px; margin-bottom:10px; color:{sub_text}; font-size:16px; font-weight:bold; border-bottom:1px solid {border_color}; padding-bottom:5px;'>📆 {date_val.day}日 ({ws})</div>", unsafe_allow_html=True)
-                for idx, r in group.iterrows():
-                    v = str(r.get('Venue', '')).strip()
-                    vd = f" @ {v}" if v else ""
-                    with st.expander(f"{COLOR_MAP.get(r['Category'], '⚪')} **{r['Title']}**{vd}"):
-                        render_event_details_and_edit(r, f"m_{idx}")
-        st.markdown('</div>', unsafe_allow_html=True)
+                    else: 
+                        # 当天无演出，纯数字展示 (禁用态)
+                        cols[i].button(f"{day}", key=f"d_{target_date}", disabled=True, use_container_width=True)
 
         st.write("---")
         
-        left_col, right_col = st.columns(2)
-        with left_col:
-            st.write("### 🔜 即将出发")
-            up_df = total_df[total_df['Date'] >= current_date].sort_values(by='Date').head(5)
-            if not up_df.empty:
-                for idx, r in up_df.iterrows():
-                    v = str(r.get('Venue', '')).strip()
-                    with st.expander(f"📌 {r['Date']} | **{r['Title']}**{f' @ {v}' if v else ''}"): render_event_details_and_edit(r, f"u_{idx}")
-            else: st.info("近期无新安排")
-        with right_col:
-            st.write("### ⏪ 近期回顾")
-            past_df = total_df[total_df['Date'] < current_date].sort_values(by='Date', ascending=False).head(5)
-            if not past_df.empty:
-                for idx, r in past_df.iterrows():
-                    with st.expander(f"🎞️ {r['Date']} | **{r['Title']}**{f' ★'*int(r['Rating']) if pd.notnull(r['Rating']) else ''}"): render_event_details_and_edit(r, f"p_{idx}")
-            else: st.info("暂无记录")
+        # 3. 智能行程明细：计算离「今天」的绝对天数，并优先排序最临近的！
+        st.write(f"### 📍 {st.session_state.cal_month}月 行程明细 (临近优先)")
+        if not month_df.empty:
+            month_df_sorted = month_df.copy()
+            # 计算距离今天的绝对天数差
+            month_df_sorted['days_diff'] = (pd.to_datetime(month_df_sorted['Date']).dt.date - current_date).apply(lambda x: abs(x.days))
+            # 优先按照距离今天的天数排序，其次按日期顺延
+            month_df_sorted = month_df_sorted.sort_values(by=['days_diff', 'Date'])
+            
+            for idx, r in month_df_sorted.iterrows():
+                v = str(r.get('Venue', '')).strip()
+                vd = f" @ {v}" if v else ""
+                
+                # 给当天的活动加个小火苗标识
+                if r['Date'] == current_date:
+                    prefix = "🔥 今日 | "
+                elif r['Date'] > current_date:
+                    prefix = f"🔜 {r['Date'].strftime('%m-%d')} | "
+                else:
+                    prefix = f"⏪ {r['Date'].strftime('%m-%d')} | "
+                    
+                with st.expander(f"{prefix}{COLOR_MAP.get(r['Category'], '⚪')} **{r['Title']}**{vd}"):
+                    render_event_details_and_edit(r, f"m_{idx}")
+        else:
+            st.info(f"{st.session_state.cal_month}月 暂无日程，快去添加吧！")
+            
     else: st.info("暂无数据。")
 
 # ----------------- 模块 2：数据统计 -----------------
@@ -289,58 +312,32 @@ elif menu == "🎤 单口喜剧专场记录":
         st.dataframe(year_specials[['Comedian', 'Special_Name', 'Type', 'Format', 'Note']], use_container_width=True)
     else: st.info("尚未录入专场数据。")
 
-# ----------------- 模块 4：数据录入 (带强力除错功能的AI解析) -----------------
+# ----------------- 模块 4：数据录入 -----------------
 elif menu == "📝 数据录入":
     t1, t2, t3 = st.tabs(["🤖 AI 智能解析", "✍️ 手动常规录入", "🎤 专场专属录入"])
-    
     with t1:
         st.caption("粘贴聊天记录或碎碎念，自动提炼并归档。")
-        DEEPSEEK_API_KEY = st.secrets["DEEPSEEK_API_KEY"]
+        DEEPSEEK_API_KEY = st.secrets.get("DEEPSEEK_API_KEY", "")
         raw_text = st.text_area("输入文字：", height=120, label_visibility="collapsed", placeholder="昨天在大剧院看剧花了680，给五星。")
-        
         if st.button("🪄 开始解析", use_container_width=True):
-            if raw_text.strip():
+            if not DEEPSEEK_API_KEY:
+                st.error("未找到 DEEPSEEK_API_KEY，请检查 Streamlit Secrets 配置。")
+            elif raw_text.strip():
                 with st.spinner("解析中..."):
                     try:
-                        url = "https://api.deepseek.com/v1/chat/completions"
-                        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
-                        system_prompt = f"""
-                        提取演艺消费记录为JSON。今天日期：{current_date.strftime('%Y-%m-%d')}。
-                        "Category": '🎙️ 单口喜剧', '🎭 其他喜剧', '🎬 电影纪录', '🎸 Live/音乐节', '🏛️ 音乐剧/舞台剧' 之一。
-                        "Date": YYYY-MM-DD。
-                        "Title": 演出名。
-                        "Artist": 艺人/导演。
-                        "Venue": 剧场名。
-                        "Price": 整数，无则空(null)。
-                        "Rating": 1-5整数，无则空(null)。
-                        "Review": 短评。
-                        """
-                        payload = {"model": "deepseek-chat", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": raw_text}], "temperature": 0.1}
-                        
-                        response = requests.post(url, json=payload, headers=headers, timeout=30)
-                        
-                        # ✨ 精准拦截状态码：如果是欠费、被封号等，这里会直接红色弹窗
+                        url, headers = "https://api.deepseek.com/v1/chat/completions", {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+                        system_prompt = f"提取演艺消费记录为JSON。今天日期：{current_date.strftime('%Y-%m-%d')}。\"Category\": '🎙️ 单口喜剧', '🎭 其他喜剧', '🎬 电影纪录', '🎸 Live/音乐节', '🏛️ 音乐剧/舞台剧' 之一。\"Date\": YYYY-MM-DD。\"Title\": 演出名。\"Artist\": 艺人/导演。\"Venue\": 剧场名。\"Price\": 整数，无则空(null)。\"Rating\": 1-5整数，无则空(null)。\"Review\": 短评。输出纯 JSON，不含反引号。"
+                        response = requests.post(url, json={"model": "deepseek-chat", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": raw_text}], "temperature": 0.1}, headers=headers, timeout=30)
                         if response.status_code != 200:
-                            st.error(f"🔴 API 拒绝访问 (状态码 {response.status_code})：{response.text}")
+                            st.error(f"🔴 API 拒绝访问 ({response.status_code})：{response.text}")
                         else:
                             ai_content = response.json()['choices'][0]['message']['content'].strip()
-                            
-                            # ✨ 暴力提取机制：不管模型怎么说废话，只抓取 {} 里的核心 JSON
                             json_match = re.search(r'\{.*\}', ai_content, re.DOTALL)
                             if json_match:
-                                clean_json = json_match.group(0)
-                                st.session_state['parsed_data'] = json.loads(clean_json)
-                                st.rerun() # 提取成功后主动刷新，展示下方的核对表单
-                            else:
-                                st.error(f"🟡 AI 结构异常，未能识别出标准格式。原始回复：\n{ai_content}")
-                                
-                    except requests.exceptions.RequestException as e:
-                        st.error(f"🌐 网络请求异常 (请检查服务器是否屏蔽了外网): {e}")
-                    except json.JSONDecodeError as e:
-                        st.error(f"🧩 JSON 结构转换失败: {e}")
-                    except Exception as e:
-                        st.error(f"❌ 发生未知错误: {e}")
-            
+                                st.session_state['parsed_data'] = json.loads(json_match.group(0))
+                                st.rerun()
+                            else: st.error("🟡 结构异常，未能识别标准格式。")
+                    except Exception as e: st.error(f"❌ 解析异常: {e}")
         if 'parsed_data' in st.session_state:
             data = st.session_state['parsed_data']
             st.divider()
@@ -356,7 +353,6 @@ elif menu == "📝 数据录入":
                 idx = [None, 1, 2, 3, 4, 5].index(data.get('Rating')) if data.get('Rating') in [1, 2, 3, 4, 5] else 0
                 f_rating = st.selectbox("评分", [None, 1, 2, 3, 4, 5], index=idx)
             f_review = st.text_area("短评", value=data.get('Review', ''))
-            
             if st.button("✔️ 确认入库", type="primary", use_container_width=True):
                 sheet_name = CATEGORY_MAP[f_cat]
                 new_row = pd.DataFrame([{"Date": f_date, "Title": f_title, "Artist": f_artist, "Venue": f_venue, "Price": f_price if f_price is not None else "", "Rating": f_rating if f_rating is not None else "", "Review": f_review}])
