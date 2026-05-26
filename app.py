@@ -33,18 +33,18 @@ st.markdown(f"""
     .stApp {{ background-color: {bg_color}; color: {text_color}; font-family: -apple-system, sans-serif; }}
     h1 {{ color: {text_color} !important; font-weight: 700 !important; font-size: 26px !important; padding-bottom: 5px; }}
     h2, h3 {{ color: {text_color} !important; font-weight: 600 !important; font-size: 18px !important; margin-top: 10px !important; }}
-    .ins-card {{ background-color: {card_bg}; border: 1px solid {border_color}; padding: 15px; border-radius: 6px; margin-bottom: 10px; }}
-    .ins-tag {{ display: inline-block; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px; background-color: {border_color}; color: {text_color}; margin-right: 6px; }}
     .stTabs [data-baseweb="tab-list"] {{ gap: 20px; }}
     .stTabs [data-baseweb="tab"] {{ color: {sub_text}; font-weight: 600; }}
     .stTabs [aria-selected="true"] {{ color: {text_color} !important; border-bottom: 2px solid {text_color} !important; }}
+    /* 优化折叠面板UI，使其看起来像高级卡片 */
+    [data-testid="stExpander"] {{ border: 1px solid {border_color} !important; border-radius: 8px !important; background-color: {card_bg} !important; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("奇怪了的观演记录和备忘录")
 
 # ==========================================
-# 2. 核心数据同步
+# 2. 核心数据同步与全局操作函数
 # ==========================================
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -76,7 +76,6 @@ def load_all_data():
                     df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
                     df['Rating'] = pd.to_numeric(df['Rating'], errors='coerce')
                     
-                    # 消除 NaN 问题：将文本列的空白替换为真正的空字符串
                     for col in ['Artist', 'Venue', 'Review']:
                         if col in df.columns:
                             df[col] = df[col].fillna("").astype(str).replace("nan", "")
@@ -95,12 +94,9 @@ def load_all_data():
             df_specials.columns = df_specials.columns.str.strip()
             df_specials = df_specials.dropna(subset=['Special_Name'])
             df_specials['Year'] = pd.to_numeric(df_specials['Year'], errors='coerce').fillna(current_date.year).astype(int)
-            
-            # 清洗专场表的文本列
             for col in ['Comedian', 'Type', 'Format', 'Note']:
                 if col in df_specials.columns:
                     df_specials[col] = df_specials[col].fillna("").astype(str).replace("nan", "")
-                    
             data_dict["Specials"] = df_specials
         else:
             data_dict["Specials"] = pd.DataFrame()
@@ -109,8 +105,91 @@ def load_all_data():
         
     return data_dict
 
-all_data = load_all_data()
+# 🚀 核心写库逻辑：定位并更新原始数据
+def update_record(old_cat, old_date, old_title, new_cat, new_date, new_title, new_artist, new_venue, new_price, new_rating, new_review):
+    old_sheet = CATEGORY_MAP[old_cat]
+    new_sheet = CATEGORY_MAP[new_cat]
+    
+    df_old = conn.read(worksheet=old_sheet, ttl=0)
+    df_old.columns = df_old.columns.str.strip()
+    
+    # 锁定要修改的那一行 (通过日期和标题匹配)
+    df_old_dates = pd.to_datetime(df_old['Date'], errors='coerce').dt.date
+    mask = (df_old_dates == old_date) & (df_old['Title'] == old_title)
+    
+    new_row_data = {
+        "Date": new_date.strftime("%Y-%m-%d"),
+        "Title": new_title,
+        "Artist": new_artist,
+        "Venue": new_venue,
+        "Price": new_price if pd.notnull(new_price) else "",
+        "Rating": new_rating if pd.notnull(new_rating) else "",
+        "Review": new_review
+    }
+    
+    if old_sheet == new_sheet:
+        # 同一分类内直接修改
+        for k, v in new_row_data.items():
+            df_old.loc[mask, k] = v
+        conn.update(worksheet=old_sheet, data=df_old)
+    else:
+        # 跨分类移动：先从旧表删除，再追加到新表
+        df_old_kept = df_old[~mask]
+        conn.update(worksheet=old_sheet, data=df_old_kept)
+        
+        df_new = conn.read(worksheet=new_sheet, ttl=0)
+        df_new.columns = df_new.columns.str.strip()
+        df_new = pd.concat([df_new, pd.DataFrame([new_row_data])], ignore_index=True)
+        conn.update(worksheet=new_sheet, data=df_new)
+        
+    st.cache_data.clear()
 
+# 🎨 统一的卡片渲染组件（展示详情 + 编辑表单）
+def render_event_details_and_edit(row, unique_key):
+    # 1. 静态信息展示
+    price_display = f"¥{int(row['Price'])}" if pd.notnull(row['Price']) else "无价格"
+    rating_display = f"{'★'*int(row['Rating'])}" if pd.notnull(row['Rating']) else "未评分"
+    venue_text = str(row.get('Venue', '')).strip()
+    artist_text = str(row.get('Artist', '')).strip()
+    review_text = str(row.get('Review', '')).strip()
+    
+    st.caption(f"🎭 **{row['Category']}**")
+    if artist_text: st.write(f"🧑‍🎤 **演职人员:** {artist_text}")
+    if venue_text: st.write(f"📍 **场地:** {venue_text}")
+    st.write(f"🏷️ **{price_display}** &nbsp;|&nbsp; ⭐ **{rating_display}**")
+    if review_text: st.info(f"💬 {review_text}")
+    
+    st.divider()
+    
+    # 2. 可折叠的超级编辑表单
+    with st.expander("✏️ 修改 / 补全信息"):
+        with st.form(f"edit_form_{unique_key}"):
+            f_cat = st.selectbox("分类", list(CATEGORY_MAP.keys()), index=list(CATEGORY_MAP.keys()).index(row['Category']))
+            c1, c2 = st.columns(2)
+            with c1:
+                f_date = st.date_input("日期", row['Date'])
+                f_title = st.text_input("名称", row['Title'])
+                f_artist = st.text_input("演职人员", artist_text)
+            with c2:
+                f_venue = st.text_input("场地", venue_text)
+                f_price = st.number_input("票价 (元)", value=row.get('Price') if pd.notnull(row.get('Price')) else None)
+                
+                r_val = row.get('Rating')
+                r_idx = [None, 1, 2, 3, 4, 5].index(r_val) if r_val in [1, 2, 3, 4, 5] else 0
+                f_rating = st.selectbox("评分", [None, 1, 2, 3, 4, 5], index=r_idx)
+                
+            f_review = st.text_area("短评", review_text)
+            
+            if st.form_submit_button("💾 保存同步至云端", type="primary", use_container_width=True):
+                update_record(
+                    old_cat=row['Category'], old_date=row['Date'], old_title=row['Title'],
+                    new_cat=f_cat, new_date=f_date, new_title=f_title, new_artist=f_artist,
+                    new_venue=f_venue, new_price=f_price, new_rating=f_rating, new_review=f_review
+                )
+                st.success("数据已更新！")
+                st.rerun()
+
+all_data = load_all_data()
 menu = st.sidebar.radio("菜单", ["📅 当月日程", "📊 数据统计", "🎤 单口喜剧专场记录", "📝 数据录入"])
 
 df_list = []
@@ -149,18 +228,10 @@ if menu == "📅 当月日程":
                     if not events_today.empty:
                         dots = "".join([COLOR_MAP.get(row['Category'], "⚪") for _, row in events_today.iterrows()])
                         with cols[i].popover(f"{day}\n{dots}", use_container_width=True):
-                            for _, row in events_today.iterrows():
-                                price_display = f"¥{int(row['Price'])}" if pd.notnull(row['Price']) else "无价格"
-                                rating_display = f"{'★'*int(row['Rating'])}" if pd.notnull(row['Rating']) else "未评分"
-                                
-                                # 智能判断：如果没有场地，就不显示 " | "
-                                venue_text = str(row.get('Venue', '')).strip()
-                                venue_display = f" | {venue_text}" if venue_text else ""
-                                
-                                st.markdown(f"**{row['Title']}**")
-                                st.caption(f"{row['Category']}{venue_display}")
-                                st.write(f"🏷️ {price_display} | ⭐ {rating_display}")
-                                st.divider()
+                            for idx, row in events_today.iterrows():
+                                # 日历弹窗内嵌可折叠编辑卡片
+                                with st.expander(f"✨ {row['Title']}", expanded=True):
+                                    render_event_details_and_edit(row, f"cal_{idx}")
                     else:
                         cols[i].button(f"{day}", key=f"day_{target_date}", disabled=True, use_container_width=True)
         
@@ -171,17 +242,12 @@ if menu == "📅 当月日程":
             st.write("### 🔜 即将出发")
             upcoming_df = total_df[total_df['Date'] >= current_date].sort_values(by='Date').head(5)
             if not upcoming_df.empty:
-                for _, row in upcoming_df.iterrows():
-                    # 智能判断：如果没有场地，就不显示 "@"
+                for idx, row in upcoming_df.iterrows():
                     venue_text = str(row.get('Venue', '')).strip()
                     venue_display = f" @ {venue_text}" if venue_text else ""
-                    
-                    st.markdown(f"""
-                    <div class="ins-card" style="border-left: 4px solid {text_color};">
-                        <span style="font-size:12px; color:{sub_text};">{row['Date']}</span><br>
-                        <strong>{row['Title']}</strong> <span style="font-size:12px;">{venue_display}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    # 使用原生扩展器替换静态卡片
+                    with st.expander(f"📌 {row['Date']} | **{row['Title']}**{venue_display}"):
+                        render_event_details_and_edit(row, f"up_{idx}")
             else:
                 st.info("近期暂无新安排")
                 
@@ -189,15 +255,10 @@ if menu == "📅 当月日程":
             st.write("### ⏪ 近期回顾")
             past_df = total_df[total_df['Date'] < current_date].sort_values(by='Date', ascending=False).head(5)
             if not past_df.empty:
-                for _, row in past_df.iterrows():
-                    rating_display = f"<span style='color:#ffcc00;'>{'★'*int(row['Rating'])}</span>" if pd.notnull(row['Rating']) else "<span style='color:#888;'>未评分</span>"
-                    st.markdown(f"""
-                    <div class="ins-card">
-                        <span style="font-size:12px; color:{sub_text};">{row['Date']}</span><br>
-                        <strong>{row['Title']}</strong><br>
-                        <span style="font-size:12px;">{rating_display}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
+                for idx, row in past_df.iterrows():
+                    rating_display = f" {'★'*int(row['Rating'])}" if pd.notnull(row['Rating']) else ""
+                    with st.expander(f"🎞️ {row['Date']} | **{row['Title']}**{rating_display}"):
+                        render_event_details_and_edit(row, f"past_{idx}")
             else:
                 st.info("暂无历史记录")
     else:
